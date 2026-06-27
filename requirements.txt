@@ -1,0 +1,16 @@
+# Core
+langchain>=0.3.0,<0.4.0
+langgraph>=0.2.0,<0.3.0
+langchain-community>=0.3.0,<0.4.0
+
+# LLM backends (install at least one)
+langchain-mistralai>=0.2.0,<0.3.0     # for Mistral AI
+# langchain-openai>=0.2.0,<0.3.0     # for OpenAI
+# langchain-ollama>=0.2.0,<0.3.0     # for local Ollama
+
+# Web / API
+requests>=2.31.0
+
+# Dev
+python-dotenv>=1.0.0
+pytest>=8.0.0
