@@ -76,12 +76,8 @@ geneexplorer/
 ├── 📁 scripts/
 │   ├── 🐍 demo.py               # Verification demo
 │   └── 🐍 tui_screenshots.py    # Rich TUI screenshot generator
-├── 📁 data/                     # (optional) downloaded public datasets
 ├── 📁 frontend/
 │   └── 🐍 app.py               # Streamlit chat UI
-├── 📁 scripts/
-│   ├── 🐍 demo.py               # Verification demo
-│   └── 🐍 tui_screenshots.py    # Rich TUI screenshot generator
 ├── 📁 data/                     # (optional) downloaded public datasets
 └── 📁 notebooks/                # Exploration
 ```
