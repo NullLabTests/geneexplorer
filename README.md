@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/geneexplorer-banner.webp" alt="GeneExplorer Banner" width="750"/>
+  <img src="docs/geneexplorer-banner.webp" alt="GeneExplorer Banner" width="380"/>
 </p>
 
 <p align="center">
@@ -197,6 +197,26 @@ streamlit run frontend/app.py
   ```
   
   <sub>Customize the queries and re-run to capture your own terminal-style screenshots</sub>
+</div>
+
+<br>
+
+### 🖥️ Streamlit Frontend
+
+<div align="center">
+  <h3>Initial chat view</h3>
+  <img src="docs/frontend-initial.png" alt="Streamlit initial view" width="700"/>
+  <br><br>
+
+  <h3>Blonde hair conversation</h3>
+  <img src="docs/frontend-conversation.png" alt="Streamlit blond hair query" width="700"/>
+  <br><br>
+
+  <h3>MC1R function query</h3>
+  <img src="docs/frontend-mc1r.png" alt="Streamlit MC1R query" width="700"/>
+  <br><br>
+
+  <sub>Run locally: <code>streamlit run frontend/app.py</code></sub>
 </div>
 
 ---
