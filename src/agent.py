@@ -13,12 +13,15 @@ Supports multiple LLM backends via LLM_PROVIDER env var:
 """
 
 import os
-import sys
 
 from dotenv import load_dotenv
 
-from langchain_core.messages import SystemMessage, HumanMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import MessagesState
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import ToolNode
 
 from src.tools import search_ncbi_gene, fetch_ncbi_gene_by_id, search_trait_associations, web_search, fetch_pubmed_abstract
 from src.prompts import SYSTEM_PROMPT
@@ -28,7 +31,6 @@ load_dotenv()
 
 def _get_llm(model_name: str = None, temperature: float = 0):
     provider = os.getenv("LLM_PROVIDER", "mistral").lower().strip()
-    api_key = None
 
     if provider == "mistral":
         from langchain_mistralai import ChatMistralAI
@@ -78,12 +80,56 @@ def _get_llm(model_name: str = None, temperature: float = 0):
         )
 
 
+TOOLS = [
+    search_ncbi_gene,
+    fetch_ncbi_gene_by_id,
+    search_trait_associations,
+    web_search,
+    fetch_pubmed_abstract,
+]
+
+TOOL_MAP = {tool.name: tool for tool in TOOLS}
+TOOL_NODE = ToolNode(TOOLS)
+
+
+# ── Custom StateGraph ──────────────────────────────────────────────────
+
+class AgentState(MessagesState):
+    """State maintained across turns (conversation history in messages)."""
+
+
+def _make_call_model(model_name: str, temperature: float):
+    """Return a call_model node function with model_name/temperature baked in."""
+
+    def call_model(state: AgentState, config: RunnableConfig) -> dict:
+        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+        llm = _get_llm(
+            model_name=model_name,
+            temperature=temperature,
+        )
+        response = llm.bind_tools(TOOLS).invoke(messages)
+        return {"messages": [response]}
+
+    return call_model
+
+
+def should_continue(state: AgentState) -> str:
+    last = state["messages"][-1]
+    if hasattr(last, "tool_calls") and last.tool_calls:
+        return "tools"
+    return END
+
+
+def call_tool(state: AgentState) -> dict:
+    return TOOL_NODE.invoke(state)
+
+
 def create_gene_explorer_agent(
     model_name: str = None,
     temperature: float = 0,
-    verbose: bool = False,
+    checkpointer: MemorySaver = None,
 ) -> object:
-    """Create a GeneExplorer LangGraph ReAct agent.
+    """Create a GeneExplorer LangGraph agent with a custom StateGraph (ReAct loop).
 
     Parameters
     ----------
@@ -91,70 +137,74 @@ def create_gene_explorer_agent(
         LLM model name (provider default used if None)
     temperature : float
         LLM temperature (default 0 for deterministic answers)
-    verbose : bool
-        Not used directly here; use run_query(verbose=True)
+    checkpointer : MemorySaver or None
+        If provided, enables conversation memory across invocations.
 
     Returns
     -------
-    Compiled LangGraph agent
+    Compiled LangGraph StateGraph app
     """
-    llm = _get_llm(model_name=model_name, temperature=temperature)
+    graph = StateGraph(AgentState)
 
-    tools = [
-        search_ncbi_gene,
-        fetch_ncbi_gene_by_id,
-        search_trait_associations,
-        web_search,
-        fetch_pubmed_abstract,
-    ]
+    graph.add_node("agent", _make_call_model(model_name, temperature))
+    graph.add_node("tools", call_tool)
 
-    agent = create_react_agent(
-        llm,
-        tools,
-        state_modifier=SystemMessage(content=SYSTEM_PROMPT),
-    )
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+    graph.add_edge("tools", "agent")
 
-    return agent
+    return graph.compile(checkpointer=checkpointer)
 
 
 def run_query(
     query: str,
     model_name: str = None,
     temperature: float = 0,
+    thread_id: str = None,
     verbose: bool = False,
 ) -> str:
-    """Run a single genetics query through the GeneExplorer agent.
+    """Run a genetics query through the GeneExplorer agent with optional conversation memory.
 
     Parameters
     ----------
     query : str
-        The user's question (e.g., "What genes are associated with blonde hair?")
+        The user's question.
     model_name : str or None
-        LLM model name
+        LLM model name.
     temperature : float
-        LLM temperature
+        LLM temperature.
+    thread_id : str or None
+        Conversation thread ID for memory. Use same ID across calls for follow-ups.
     verbose : bool
-        Print agent steps
+        Print agent steps if True.
 
     Returns
     -------
     str
-        The agent's final answer
+        The agent's final answer.
     """
+    memory = MemorySaver() if thread_id else None
     agent = create_gene_explorer_agent(
         model_name=model_name,
         temperature=temperature,
-        verbose=verbose,
+        checkpointer=memory,
     )
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id or "default",
+        }
+    }
 
     if verbose:
         print(f"\n{'='*60}")
         print(f"GeneExplorer Query: {query}")
         print(f"{'='*60}\n")
 
-    result = agent.invoke({
-        "messages": [HumanMessage(content=query)],
-    })
+    result = agent.invoke(
+        {"messages": [HumanMessage(content=query)]},
+        config=config,
+    )
 
     final_answer = result["messages"][-1].content
 
@@ -168,7 +218,7 @@ def run_query(
 
 
 def main():
-    """CLI entry point for interactive GeneExplorer session."""
+    """CLI entry point with conversation memory."""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -191,6 +241,11 @@ def main():
         help="LLM temperature (default: 0)",
     )
     parser.add_argument(
+        "--thread-id",
+        default=None,
+        help="Conversation thread ID for follow-up memory (default: auto per session)",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -206,17 +261,28 @@ def main():
             query=args.query,
             model_name=args.model,
             temperature=args.temperature,
+            thread_id=args.thread_id,
             verbose=args.verbose,
         )
         print(answer)
     else:
-        print(f"GeneExplorer Interactive Mode (LLM_PROVIDER={provider})")
-        print("Type 'exit', 'quit', or Ctrl+C to stop.\n")
+        import uuid
+        session_id = args.thread_id or str(uuid.uuid4())
+        memory = MemorySaver()
         agent = create_gene_explorer_agent(
             model_name=args.model,
             temperature=args.temperature,
-            verbose=args.verbose,
+            checkpointer=memory,
         )
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+            }
+        }
+
+        print(f"GeneExplorer Interactive Mode (LLM_PROVIDER={provider})")
+        print(f"Session: {session_id}")
+        print("Type 'exit', 'quit', or Ctrl+C to stop.\n")
 
         while True:
             try:
@@ -232,9 +298,10 @@ def main():
             if not query.strip():
                 continue
 
-            result = agent.invoke({
-                "messages": [HumanMessage(content=query)],
-            })
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=query)]},
+                config=config,
+            )
             print(result["messages"][-1].content)
             print()
 

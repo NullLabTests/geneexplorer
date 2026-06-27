@@ -10,120 +10,120 @@ def search_trait_associations(trait: str) -> str:
 
     query = trait.lower().strip()
 
-    # GWAS Catalog API: search associations by trait
-    # The API supports /api/efo/search or /api/associations/search/byefotrait
+    # Option 1: try GWAS Catalog API live
+    live_results = _try_gwas_live(query)
+    if live_results:
+        return live_results
+
+    # Option 2: fallback to curated public literature
+    return _fallback_trait_associations(query)
+
+
+def _try_gwas_live(query: str) -> str | None:
+    """Attempt to fetch real-time data from the GWAS Catalog REST API."""
+
     try:
+        # Step 1: search EFO terms matching the trait
         url = f"{GWAS_API_BASE}/efo/search"
         params = {"term": query, "size": 5}
-        resp = requests.get(url, params=params, timeout=30, headers={"Accept": "application/json"})
+        resp = requests.get(
+            url, params=params, timeout=15,
+            headers={"Accept": "application/json"},
+        )
         resp.raise_for_status()
         efo_data = resp.json()
+    except Exception:
+        return None
 
-        if not efo_data.get("_embedded", {}).get("efoResults"):
-            return f"No GWAS Catalog EFO terms found for '{trait}'. Try a broader term (e.g., 'hair color' instead of 'blonde hair')."
+    efo_results = efo_data.get("_embedded", {}).get("efoResults", [])
+    if not efo_results:
+        return None
 
-        # Take the first EFO term
-        efo = efo_data["_embedded"]["efoResults"][0]
-        efo_uri = efo.get("uri", "")
-        efo_label = efo.get("label", query)
+    efo = efo_results[0]
+    efo_uri = efo.get("uri", "")
+    efo_label = efo.get("label", query)
 
-        # Now get associations for this EFO term
+    # Step 2: fetch associations for that EFO term
+    try:
         assoc_url = f"{GWAS_API_BASE}/associations/search/efo"
-        assoc_params = {
-            "efoUri": efo_uri,
-            "size": 20,
-        }
         assoc_resp = requests.get(
-            assoc_url, params=assoc_params, timeout=30, headers={"Accept": "application/json"}
+            assoc_url,
+            params={"efoUri": efo_uri, "size": 20},
+            timeout=20,
+            headers={"Accept": "application/json"},
         )
         assoc_resp.raise_for_status()
         assoc_data = assoc_resp.json()
-
-    except requests.exceptions.Timeout:
-        return f"GWAS Catalog API timed out for '{trait}'. The service may be slow; try again later."
-    except requests.exceptions.RequestException as e:
-        # Fallback: return well-known associations based on public literature
-        return _fallback_trait_associations(trait)
+    except Exception:
+        return None
 
     associations = assoc_data.get("_embedded", {}).get("associations", [])
     if not associations:
-        return _fallback_trait_associations(trait)
+        return None
 
     seen_genes = set()
     results = [f"GWAS Catalog associations for '{efo_label}' (EFO: {efo_uri})"]
 
-    for assoc in associations:
-        if len(seen_genes) >= 10:
+    for assoc in associations[:30]:
+        if len(seen_genes) >= 12:
             break
 
-        genes = _extract_genes_from_association(assoc)
+        genes = _extract_live_genes(assoc)
         if not genes:
             continue
 
         pvalue = assoc.get("pvalue", "N/A")
-        pvalue_desc = assoc.get("pvalueDescription", "")
-        snps = assoc.get("strongestAllele", "")
-        risk_allele = assoc.get("riskFrequency", "")
+        pvalue_text = f"p={pvalue}" if pvalue != "N/A" else ""
+        snp_info = assoc.get("strongestAllele", "")
         pubmed_id = assoc.get("pubmedId", "")
 
-        for gene in genes:
-            gene_symbol = gene.get("geneName", "")
+        for gene_symbol, chrom in genes:
             if gene_symbol and gene_symbol not in seen_genes:
                 seen_genes.add(gene_symbol)
-                chrom = gene.get("chromosomeName", "")
-                loc = f" (chr{chrom})" if chrom else ""
-                snp_info = f" | SNPs: {snps}" if snps else ""
-                pval_info = f" | p={pvalue}" if pvalue != "N/A" else ""
-                pmid = f" | PMID: {pubmed_id}" if pubmed_id else ""
-                results.append(
-                    f"- {gene_symbol}{loc}{snp_info}{pval_info}{pmid}"
-                )
+                parts = [gene_symbol]
+                if chrom:
+                    parts.append(f"(chr{chrom})")
+                if snp_info:
+                    parts.append(f"SNP: {snp_info}")
+                if pvalue_text:
+                    parts.append(pvalue_text)
+                if pubmed_id:
+                    parts.append(f"PMID: {pubmed_id}")
+                results.append("  - " + " | ".join(parts))
 
-    if len(results) == 1:
-        results.append("(No specific gene-level associations returned from API)")
+    if len(results) > 1:
+        return "\n".join(results)
 
-    return "\n".join(results)
+    return None
 
 
-def _extract_genes_from_association(assoc: dict) -> list:
-    """Extract gene entries from a GWAS Catalog association response."""
+def _extract_live_genes(assoc: dict) -> list[tuple[str, str]]:
     genes = []
 
-    # Check loci -> genes
-    loci = assoc.get("loci", [])
-    for locus in loci:
-        locus_genes = locus.get("genes", [])
-        for g in locus_genes:
-            genes.append({
-                "geneName": g.get("geneName", ""),
-                "chromosomeName": locus.get("chromosomeName", ""),
-            })
+    for locus in assoc.get("loci", []):
+        chrom = locus.get("chromosomeName", "")
+        for g in locus.get("genes", []):
+            name = (g.get("geneName") or "").strip()
+            if name:
+                genes.append((name, chrom))
 
-    # Check directly nested genes (some API versions)
     if not genes:
-        direct_genes = assoc.get("genes", [])
-        for g in direct_genes:
-            genes.append({
-                "geneName": g.get("geneName", ""),
-                "chromosomeName": g.get("chromosomeName", ""),
-            })
+        for g in assoc.get("genes", []):
+            name = (g.get("geneName") or "").strip()
+            chrom = (g.get("chromosomeName") or "").strip()
+            if name:
+                genes.append((name, chrom))
 
-    # Check reported genes (list of strings somewhere)
-    reported = assoc.get("reportedGenes", [])
-    for gene_name in reported:
-        if isinstance(gene_name, str):
-            genes.append({
-                "geneName": gene_name,
-                "chromosomeName": "",
-            })
+    if not genes:
+        for name in assoc.get("reportedGenes", []):
+            if isinstance(name, str) and name.strip():
+                genes.append((name.strip(), ""))
 
     return genes
 
 
 def _fallback_trait_associations(trait: str) -> str:
-    """Fallback when GWAS Catalog API is unreachable. Returns curated public knowledge based on well-studied traits."""
-
-    trait = trait.lower().strip()
+    """Curated public-literature fallback for well-studied traits."""
 
     KNOWN_TRAITS = {
         "blonde": {
@@ -175,7 +175,6 @@ def _fallback_trait_associations(trait: str) -> str:
         },
     }
 
-    # Try exact or partial match
     for key, data in KNOWN_TRAITS.items():
         if key in trait or trait in key:
             lines = [
@@ -191,7 +190,6 @@ def _fallback_trait_associations(trait: str) -> str:
             )
             return "\n".join(lines)
 
-    # Generic response if trait not in known list
     return (
         f"GWAS Catalog API was unreachable for '{trait}', and '{trait}' is not in the curated fallback set. "
         "Please try again later or use a more specific trait term. "

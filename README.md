@@ -77,6 +77,12 @@ geneexplorer/
 │   ├── 🐍 demo.py               # Verification demo
 │   └── 🐍 tui_screenshots.py    # Rich TUI screenshot generator
 ├── 📁 data/                     # (optional) downloaded public datasets
+├── 📁 frontend/
+│   └── 🐍 app.py               # Streamlit chat UI
+├── 📁 scripts/
+│   ├── 🐍 demo.py               # Verification demo
+│   └── 🐍 tui_screenshots.py    # Rich TUI screenshot generator
+├── 📁 data/                     # (optional) downloaded public datasets
 └── 📁 notebooks/                # Exploration
 ```
 
@@ -114,9 +120,10 @@ python -m src.agent "What genes are associated with blonde hair?"
 # Verbose (see every tool call)
 python -m src.agent "What is the function of MC1R?" --verbose
 
-# Interactive session
+# Interactive session (with conversation memory)
 python -m src.agent
 >>> What genes control eye color?
+>>> Tell me more about OCA2   # remembers context
 ```
 
 ### As a Python module
@@ -126,6 +133,13 @@ from src.agent import run_query
 
 answer = run_query("What genes are associated with blonde hair?")
 print(answer)
+```
+
+### Streamlit frontend (optional)
+
+```bash
+pip install streamlit
+streamlit run frontend/app.py
 ```
 
 ---

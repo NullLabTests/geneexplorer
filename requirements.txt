@@ -11,6 +11,13 @@ langchain-mistralai>=0.2.0,<0.3.0     # for Mistral AI
 # Web / API
 requests>=2.31.0
 
+# NCBI Entrez (optional, for cleaner XML parsing)
+biopython>=1.83
+
+# Frontend (optional)
+streamlit>=1.36.0
+# gradio>=4.0.0                   # alternative to streamlit
+
 # Dev
 python-dotenv>=1.0.0
 pytest>=8.0.0
